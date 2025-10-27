@@ -881,7 +881,7 @@ function CSWTable({
 }
 
 /* ---------- MASTER component with tabs ---------- */
-export function WorkflowPro() {
+function WorkflowPro() {
   const [rows, setRows] = useLocalStorageState<CSWRow[]>("csw.book", [
     // seed with your four examples; you can delete/modify inline
     {
