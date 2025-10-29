@@ -15,12 +15,12 @@ type Row = {
   email: string;
   lastTouch: string;       // mm/dd/yyyy
   lastContacted: string;   // mm/dd/yyyy
-  signedDate?: string;     // mm/dd/yyyy (new)
+  signedDate?: string;     // mm/dd/yyyy
   pipedriveUrl?: string;
   notes?: string;
   tags: Tag[];
   target?: boolean;
-  hideRenewal?: boolean;   // new
+  hideRenewal?: boolean;
 };
 
 // localStorage key (unchanged to preserve data)
@@ -28,7 +28,6 @@ const LS_KEY = "csw.book";
 
 /** Helpers */
 const uid = () => Math.random().toString(36).slice(2, 10);
-
 const fmt = (d: string) => d?.trim() || "";
 const todayStr = () => new Date().toLocaleDateString("en-US");
 
@@ -77,7 +76,6 @@ function useLocalRows() {
         const parsed = JSON.parse(raw) as Row[];
         setRows(migrate(parsed));
       } else {
-        // seed with empty set; you already have real data
         setRows([]);
       }
     } catch {
@@ -116,18 +114,19 @@ const Badge = ({ t }: { t: Tag }) => {
 };
 
 /** =========================
- * Column Resize Table
- * =========================
- * Simple resizable columns via <colgroup> + drag handles in the header.
- */
+ * Resizable + Sortable Table
+ * ========================= */
 type Column<RowT> = {
   key: keyof RowT | string;
   label: string;
-  initPx?: number;       // initial width in px
+  initPx?: number;
   align?: "left" | "right" | "center";
-  // Renderers
   render?: (row: RowT) => React.ReactNode;
   headerRender?: () => React.ReactNode;
+
+  /** Sorting (optional) */
+  sortable?: boolean;                 // default true
+  sortBy?: (row: RowT) => string | number; // value read when sorting
 };
 
 function ResizableTable<RowT extends { id: string }>({
@@ -140,18 +139,23 @@ function ResizableTable<RowT extends { id: string }>({
   rowClassName?: string;
 }) {
   const MIN_W = 70;
+
+  // sorting state
+  const [sort, setSort] = React.useState<{ key: string; dir: "asc" | "desc" }>(() => ({
+    key: String(columns[0]?.key ?? ""),
+    dir: "asc",
+  }));
+
+  // widths & resize
   const [widths, setWidths] = React.useState<number[]>(
     columns.map((c) => Math.max(c.initPx ?? 140, MIN_W))
   );
-  const containerRef = React.useRef<HTMLDivElement | null>(null);
-
-  // drag state
-  const drag = React.useRef<{
-    idx: number;
-    startX: number;
-    startW: number;
-    active: boolean;
-  }>({ idx: -1, startX: 0, startW: 0, active: false });
+  const drag = React.useRef<{ idx: number; startX: number; startW: number; active: boolean }>({
+    idx: -1,
+    startX: 0,
+    startW: 0,
+    active: false,
+  });
 
   const onMouseMove = React.useCallback((e: MouseEvent) => {
     if (!drag.current.active) return;
@@ -172,19 +176,37 @@ function ResizableTable<RowT extends { id: string }>({
   }, [onMouseMove]);
 
   const startDrag = (idx: number, event: React.MouseEvent) => {
-    drag.current = {
-      idx,
-      startX: event.clientX,
-      startW: widths[idx],
-      active: true,
-    };
+    drag.current = { idx, startX: event.clientX, startW: widths[idx], active: true };
     document.body.style.cursor = "col-resize";
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
   };
 
+  // sorting helpers
+  function getSortVal(row: RowT, col: Column<RowT>): string | number {
+    if (col.sortBy) return col.sortBy(row);
+    const raw = (row as any)[col.key as string];
+    if (raw == null) return "";
+    return typeof raw === "number" ? raw : String(raw);
+  }
+
+  const sortedRows = React.useMemo(() => {
+    const col = columns.find((c) => String(c.key) === sort.key);
+    if (!col) return rows;
+    const dirMul = sort.dir === "asc" ? 1 : -1;
+
+    return [...rows].sort((a, b) => {
+      const av = getSortVal(a, col);
+      const bv = getSortVal(b, col);
+      if (typeof av === "number" && typeof bv === "number") {
+        return (av - bv) * dirMul;
+      }
+      return String(av).localeCompare(String(bv), undefined, { numeric: true }) * dirMul;
+    });
+  }, [rows, columns, sort]);
+
   return (
-    <div ref={containerRef} className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+    <div className="overflow-x-scroll rounded-2xl border border-slate-200 bg-white">
       <table className="w-max text-sm table-fixed">
         <colgroup>
           {widths.map((w, i) => (
@@ -194,30 +216,49 @@ function ResizableTable<RowT extends { id: string }>({
 
         <thead className="bg-slate-50 text-slate-600 select-none">
           <tr className="text-left">
-            {columns.map((c, i) => (
-              <th key={String(c.key)} className="relative font-semibold">
-                <div
-                  className={`px-3 py-2 whitespace-nowrap ${
-                    c.align === "right" ? "text-right" : c.align === "center" ? "text-center" : "text-left"
-                  }`}
-                  title={typeof c.label === "string" ? c.label : undefined}
-                >
-                  {c.headerRender ? c.headerRender() : c.label}
-                </div>
-                {/* drag handle */}
-                <span
-                  onMouseDown={(e) => startDrag(i, e)}
-                  className="absolute top-0 right-0 h-full w-1 cursor-col-resize"
-                />
-              </th>
-            ))}
+            {columns.map((c, i) => {
+              const sortable = c.sortable !== false;
+              const isActive = String(c.key) === sort.key;
+              return (
+                <th key={String(c.key)} className="relative font-semibold">
+                  <div
+                    className={`px-3 py-2 whitespace-nowrap ${
+                      c.align === "right"
+                        ? "text-right"
+                        : c.align === "center"
+                        ? "text-center"
+                        : "text-left"
+                    } ${sortable ? "cursor-pointer" : ""}`}
+                    onClick={() => {
+                      if (!sortable) return;
+                      const k = String(c.key);
+                      setSort((s) =>
+                        s.key === k ? { key: k, dir: s.dir === "asc" ? "desc" : "asc" } : { key: k, dir: "asc" }
+                      );
+                    }}
+                    title={typeof c.label === "string" ? c.label : undefined}
+                  >
+                    {c.headerRender ? c.headerRender() : c.label}
+                    {isActive && (
+                      <span className="ml-1 text-slate-400">{sort.dir === "asc" ? "↑" : "↓"}</span>
+                    )}
+                  </div>
+
+                  {/* wider drag handle for easier grab */}
+                  <span
+                    onMouseDown={(e) => startDrag(i, e)}
+                    className="absolute top-0 -right-1 h-full w-2 cursor-col-resize"
+                  />
+                </th>
+              );
+            })}
           </tr>
         </thead>
 
         <tbody>
-          {rows.map((r) => (
+          {sortedRows.map((r) => (
             <tr key={r.id} className={`border-t border-slate-100 ${rowClassName}`}>
-              {columns.map((c, i) => (
+              {columns.map((c) => (
                 <td key={String(c.key)} className="px-3 py-2 whitespace-nowrap">
                   {c.render ? (c.render(r) as React.ReactNode) : ((r as any)[c.key] as React.ReactNode)}
                 </td>
@@ -313,13 +354,11 @@ export default function CustomerSuccessApp() {
       case "Today’s Targets":
         return rows.filter((r) => r.target);
       case "Renewals": {
-        // everyone, sort by upcoming renewal (signedDate + 1y)
         const withOrder = rows.map((r) => {
           const nextRenewal = addYears(r.signedDate, 1);
           const ord = nextRenewal ? nextRenewal.getTime() : Number.POSITIVE_INFINITY;
           return { row: r, ord, hidden: r.hideRenewal ?? false };
         });
-        // hide = pushed to bottom
         withOrder.sort((a, b) => {
           if (a.hidden !== b.hidden) return a.hidden ? 1 : -1;
           return a.ord - b.ord;
@@ -357,15 +396,15 @@ export default function CustomerSuccessApp() {
 
   const deleteRow = (id: string) => setRows((cur) => cur.filter((r) => r.id !== id));
 
-  /** Columns (NO WRAP + resizable) */
+  /** Columns (NO WRAP + resizable + sortable) */
   const baseCols: Column<Row>[] = [
     {
       key: "tags",
       label: "Tags",
       initPx: 170,
+      sortable: false, // keep tags unsortable
       render: (r) => (
         <div className="flex items-center gap-2 whitespace-nowrap">
-          {/* BoB shows checkboxes to toggle tags */}
           {workflowTab === "Book of Business" ? (
             ["Referral", "Upsell", "Churn Risk"].map((t) => {
               const tag = t as Tag;
@@ -377,9 +416,7 @@ export default function CustomerSuccessApp() {
                     checked={checked}
                     onChange={(e) =>
                       updateRow(r.id, {
-                        tags: e.target.checked
-                          ? [...r.tags, tag]
-                          : r.tags.filter((x) => x !== tag),
+                        tags: e.target.checked ? [...r.tags, tag] : r.tags.filter((x) => x !== tag),
                       })
                     }
                   />
@@ -388,7 +425,6 @@ export default function CustomerSuccessApp() {
               );
             })
           ) : (
-            // Non-BoB tabs: show badges
             (r.tags.length ? r.tags : []).map((t) => <Badge key={t} t={t} />)
           )}
         </div>
@@ -399,11 +435,7 @@ export default function CustomerSuccessApp() {
       label: "Company",
       initPx: 210,
       render: (r) => (
-        <Editable
-          value={fmt(r.company)}
-          onCommit={(v) => updateRow(r.id, { company: v })}
-          placeholder="Company"
-        />
+        <Editable value={fmt(r.company)} onCommit={(v) => updateRow(r.id, { company: v })} placeholder="Company" />
       ),
     },
     {
@@ -411,11 +443,7 @@ export default function CustomerSuccessApp() {
       label: "Primary Contact",
       initPx: 170,
       render: (r) => (
-        <Editable
-          value={fmt(r.primaryContact)}
-          onCommit={(v) => updateRow(r.id, { primaryContact: v })}
-          placeholder="Name"
-        />
+        <Editable value={fmt(r.primaryContact)} onCommit={(v) => updateRow(r.id, { primaryContact: v })} placeholder="Name" />
       ),
     },
     {
@@ -423,12 +451,7 @@ export default function CustomerSuccessApp() {
       label: "Phone",
       initPx: 130,
       render: (r) => (
-        <Editable
-          value={fmt(r.phone)}
-          onCommit={(v) => updateRow(r.id, { phone: v })}
-          placeholder="Phone"
-          className="tabular-nums"
-        />
+        <Editable value={fmt(r.phone)} onCommit={(v) => updateRow(r.id, { phone: v })} placeholder="Phone" className="tabular-nums" />
       ),
     },
     {
@@ -436,53 +459,41 @@ export default function CustomerSuccessApp() {
       label: "Email",
       initPx: 210,
       render: (r) => (
-        <Editable
-          value={fmt(r.email)}
-          onCommit={(v) => updateRow(r.id, { email: v })}
-          placeholder="Email"
-        />
+        <Editable value={fmt(r.email)} onCommit={(v) => updateRow(r.id, { email: v })} placeholder="Email" />
       ),
     },
     {
       key: "lastTouch",
       label: "Last Touch",
       initPx: 120,
+      sortBy: (r) => parseMDY(r.lastTouch)?.getTime() ?? 0,
       render: (r) => (
-        <Editable
-          value={fmt(r.lastTouch)}
-          onCommit={(v) => updateRow(r.id, { lastTouch: v })}
-          placeholder="mm/dd/yyyy"
-        />
+        <Editable value={fmt(r.lastTouch)} onCommit={(v) => updateRow(r.id, { lastTouch: v })} placeholder="mm/dd/yyyy" />
       ),
     },
     {
       key: "lastContacted",
       label: "Last Contacted",
       initPx: 130,
+      sortBy: (r) => parseMDY(r.lastContacted)?.getTime() ?? 0,
       render: (r) => (
-        <Editable
-          value={fmt(r.lastContacted)}
-          onCommit={(v) => updateRow(r.id, { lastContacted: v })}
-          placeholder="mm/dd/yyyy"
-        />
+        <Editable value={fmt(r.lastContacted)} onCommit={(v) => updateRow(r.id, { lastContacted: v })} placeholder="mm/dd/yyyy" />
       ),
     },
     {
       key: "signedDate",
       label: "Signed Date",
       initPx: 120,
+      sortBy: (r) => parseMDY(r.signedDate || "")?.getTime() ?? 0,
       render: (r) => (
-        <Editable
-          value={fmt(r.signedDate || "")}
-          onCommit={(v) => updateRow(r.id, { signedDate: v })}
-          placeholder="mm/dd/yyyy"
-        />
+        <Editable value={fmt(r.signedDate || "")} onCommit={(v) => updateRow(r.id, { signedDate: v })} placeholder="mm/dd/yyyy" />
       ),
     },
     {
       key: "pipedriveUrl",
       label: "PipeDrive",
-      initPx: 110, // small, no wrap
+      initPx: 110,
+      sortable: false,
       render: (r) =>
         r.pipedriveUrl ? (
           <a
@@ -495,46 +506,33 @@ export default function CustomerSuccessApp() {
             Open
           </a>
         ) : (
-          <Editable
-            value=""
-            onCommit={(v) => updateRow(r.id, { pipedriveUrl: v })}
-            placeholder="https://…"
-          />
+          <Editable value="" onCommit={(v) => updateRow(r.id, { pipedriveUrl: v })} placeholder="https://…" />
         ),
     },
     {
       key: "notes",
       label: "Notes",
-      initPx: 260, // slightly smaller by default (resizable anyway)
+      initPx: 260,
       render: (r) => (
-        <Editable
-          value={fmt(r.notes || "")}
-          onCommit={(v) => updateRow(r.id, { notes: v })}
-          placeholder="Notes…"
-        />
+        <Editable value={fmt(r.notes || "")} onCommit={(v) => updateRow(r.id, { notes: v })} placeholder="Notes…" />
       ),
     },
     {
       key: "target",
       label: "Target?",
       initPx: 90,
+      sortable: false,
       render: (r) => (
-        <input
-          type="checkbox"
-          checked={!!r.target}
-          onChange={(e) => updateRow(r.id, { target: e.target.checked })}
-        />
+        <input type="checkbox" checked={!!r.target} onChange={(e) => updateRow(r.id, { target: e.target.checked })} />
       ),
     },
     {
       key: "actions",
       label: "",
       initPx: 90,
+      sortable: false,
       render: (r) => (
-        <button
-          onClick={() => deleteRow(r.id)}
-          className="px-3 py-1 rounded bg-rose-600 text-white text-sm hover:bg-rose-700 whitespace-nowrap"
-        >
+        <button onClick={() => deleteRow(r.id)} className="px-3 py-1 rounded bg-rose-600 text-white text-sm hover:bg-rose-700 whitespace-nowrap">
           Delete
         </button>
       ),
@@ -546,6 +544,7 @@ export default function CustomerSuccessApp() {
     key: "hideRenewal",
     label: "Hide",
     initPx: 70,
+    sortable: false,
     render: (r) => (
       <input
         type="checkbox"
@@ -557,7 +556,9 @@ export default function CustomerSuccessApp() {
   };
 
   const columnsForTab =
-    workflowTab === "Renewals" ? [...baseCols.slice(0, baseCols.length - 2), renewalHideCol, ...baseCols.slice(-2)] : baseCols;
+    workflowTab === "Renewals"
+      ? [...baseCols.slice(0, baseCols.length - 2), renewalHideCol, ...baseCols.slice(-2)]
+      : baseCols;
 
   /** Layout */
   return (
@@ -631,11 +632,7 @@ export default function CustomerSuccessApp() {
             </div>
 
             {/* Table */}
-            <ResizableTable<Row>
-              columns={columnsForTab}
-              rows={viewRows}
-              rowClassName="hover:bg-slate-50/40"
-            />
+            <ResizableTable<Row> columns={columnsForTab} rows={viewRows} rowClassName="hover:bg-slate-50/40" />
           </>
         )}
 
@@ -648,21 +645,15 @@ export default function CustomerSuccessApp() {
               <Card title="Churn Risks" value={rows.filter((r) => r.tags.includes("Churn Risk")).length} />
             </div>
 
-            {/* Simple read-only combined list */}
             <ResizableTable<Row>
               columns={[
-                { key: "tags", label: "Tags", initPx: 160, render: (r) => (r.tags.length ? r.tags.map((t) => <Badge key={t} t={t} />) : "—") },
+                { key: "tags", label: "Tags", initPx: 160, sortable: false, render: (r) => (r.tags.length ? r.tags.map((t) => <Badge key={t} t={t} />) : "—") },
                 { key: "company", label: "Company", initPx: 200 },
                 { key: "primaryContact", label: "Primary Contact", initPx: 160 },
                 { key: "email", label: "Email", initPx: 220 },
-                { key: "lastTouch", label: "Last Touch", initPx: 120 },
-                { key: "lastContacted", label: "Last Contacted", initPx: 140 },
-                {
-                  key: "signedDate",
-                  label: "Signed Date",
-                  initPx: 120,
-                  render: (r) => fmt(r.signedDate || ""),
-                },
+                { key: "lastTouch", label: "Last Touch", initPx: 120, sortBy: (r) => parseMDY(r.lastTouch)?.getTime() ?? 0 },
+                { key: "lastContacted", label: "Last Contacted", initPx: 140, sortBy: (r) => parseMDY(r.lastContacted)?.getTime() ?? 0 },
+                { key: "signedDate", label: "Signed Date", initPx: 120, sortBy: (r) => parseMDY(r.signedDate || "")?.getTime() ?? 0 },
               ]}
               rows={rows}
             />
