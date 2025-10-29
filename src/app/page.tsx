@@ -2,299 +2,338 @@
 
 import React from "react";
 
-/* ========================
-   Shared Types & Utilities
-======================== */
+/** =========================
+ * Types & Utilities
+ * ========================= */
+type Tag = "Referral" | "Upsell" | "Churn Risk";
 
-type CSWTag = "Referral" | "Upsell" | "Churn Risk";
-
-type CSWRow = {
+type Row = {
   id: string;
   company: string;
   primaryContact: string;
   phone: string;
   email: string;
-  lastTouch: string;      // YYYY-MM-DD (stored); display as MM/DD/YYYY
-  lastContacted: string;  // YYYY-MM-DD (stored); display as MM/DD/YYYY
-  notes?: string;
+  lastTouch: string;       // mm/dd/yyyy
+  lastContacted: string;   // mm/dd/yyyy
+  signedDate?: string;     // mm/dd/yyyy (new)
   pipedriveUrl?: string;
-  tags: CSWTag[];         // Book of Business checkboxes control these
-  target?: boolean;       // "Today's Targets" flag
+  notes?: string;
+  tags: Tag[];
+  target?: boolean;
+  hideRenewal?: boolean;   // new
 };
 
-function uid() {
-  return Math.random().toString(36).slice(2, 10);
+// localStorage key (unchanged to preserve data)
+const LS_KEY = "csw.book";
+
+/** Helpers */
+const uid = () => Math.random().toString(36).slice(2, 10);
+
+const fmt = (d: string) => d?.trim() || "";
+const todayStr = () => new Date().toLocaleDateString("en-US");
+
+/** Safe parse mm/dd/yyyy -> Date | null */
+function parseMDY(mdy: string | undefined): Date | null {
+  if (!mdy) return null;
+  const [m, d, y] = mdy.split("/").map((x) => parseInt(x, 10));
+  if (!m || !d || !y) return null;
+  const dt = new Date(y, m - 1, d);
+  return isNaN(dt.getTime()) ? null : dt;
 }
 
-/* Format YYYY-MM-DD -> MM/DD/YYYY for display only */
-function fmtDate(v: string | undefined) {
-  if (!v) return "—";
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  if (!m) return v;
-  const [, y, mo, d] = m;
-  return `${mo}/${d}/${y}`;
+/** add years to a mm/dd/yyyy string */
+function addYears(mdy: string | undefined, years: number): Date | null {
+  const dt = parseMDY(mdy);
+  if (!dt) return null;
+  const copy = new Date(dt.getTime());
+  copy.setFullYear(copy.getFullYear() + years);
+  return copy;
 }
 
-/* localStorage state hook */
-function useLocalStorageState<T>(key: string, initial: T) {
-  const [state, setState] = React.useState<T>(() => {
-    if (typeof window === "undefined") return initial;
-    try {
-      const raw = window.localStorage.getItem(key);
-      return raw ? (JSON.parse(raw) as T) : initial;
-    } catch {
-      return initial;
-    }
-  });
+/** mm/dd/yyyy from Date */
+function toMDY(date: Date): string {
+  return date.toLocaleDateString("en-US");
+}
+
+/** Non-destructive migration: add new fields if missing */
+function migrate(rows: Row[]): Row[] {
+  return rows.map((r) => ({
+    ...r,
+    signedDate: r.signedDate ?? "",
+    hideRenewal: r.hideRenewal ?? false,
+    target: r.target ?? false,
+    tags: Array.isArray(r.tags) ? r.tags : [],
+  }));
+}
+
+/** Load & Save */
+function useLocalRows() {
+  const [rows, setRows] = React.useState<Row[]>([]);
 
   React.useEffect(() => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(key, JSON.stringify(state));
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Row[];
+        setRows(migrate(parsed));
+      } else {
+        // seed with empty set; you already have real data
+        setRows([]);
+      }
+    } catch {
+      setRows([]);
     }
-  }, [key, state]);
+  }, []);
 
-  return [state, setState] as const;
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(rows));
+    } catch {}
+  }, [rows]);
+
+  return [rows, setRows] as const;
 }
 
-/* UI bits */
-function TagBadge({ t }: { t: CSWTag }) {
-  const map: Record<CSWTag, string> = {
-    "Referral": "bg-sky-100 text-sky-700 border-sky-300",
-    "Upsell": "bg-emerald-100 text-emerald-700 border-emerald-300",
+/** Small UI helpers */
+const Card = ({ title, value }: { title: string; value: React.ReactNode }) => (
+  <div className="rounded-2xl border bg-white px-4 py-3 whitespace-nowrap">
+    <div className="text-xs text-slate-500">{title}</div>
+    <div className="text-2xl font-semibold text-slate-800">{value}</div>
+  </div>
+);
+
+const Badge = ({ t }: { t: Tag }) => {
+  const map: Record<Tag, string> = {
+    Referral: "bg-sky-100 text-sky-700 border-sky-300",
+    Upsell: "bg-emerald-100 text-emerald-700 border-emerald-300",
     "Churn Risk": "bg-rose-100 text-rose-700 border-rose-300",
   };
-  return <span className={`px-2 py-0.5 text-xs rounded-full border ${map[t]}`}>{t}</span>;
-}
-
-/* Tag checkboxes used in Book of Business */
-function TagsCheckboxes({
-  value,
-  onChange,
-}: {
-  value: CSWTag[];
-  onChange: (next: CSWTag[]) => void;
-}) {
-  const all: CSWTag[] = ["Referral", "Upsell", "Churn Risk"];
   return (
-    <div className="flex gap-4 px-2 py-1">
-      {all.map((t) => {
-        const checked = value.includes(t);
-        return (
-          <label key={t} className="flex items-center gap-2 text-sm whitespace-nowrap">
-            <input
-              type="checkbox"
-              className="h-4 w-4"
-              checked={checked}
-              onChange={(e) => {
-                const next = e.target.checked
-                  ? [...value, t]
-                  : value.filter((x) => x !== t);
-                onChange(next);
-              }}
-            />
-            {t}
-          </label>
-        );
-      })}
+    <span className={`px-2 py-0.5 text-xs rounded-full border ${map[t]} whitespace-nowrap`}>
+      {t}
+    </span>
+  );
+};
+
+/** =========================
+ * Column Resize Table
+ * =========================
+ * Simple resizable columns via <colgroup> + drag handles in the header.
+ */
+type Column<RowT> = {
+  key: keyof RowT | string;
+  label: string;
+  initPx?: number;       // initial width in px
+  align?: "left" | "right" | "center";
+  // Renderers
+  render?: (row: RowT) => React.ReactNode;
+  headerRender?: () => React.ReactNode;
+};
+
+function ResizableTable<RowT extends { id: string }>({
+  columns,
+  rows,
+  rowClassName = "",
+}: {
+  columns: Column<RowT>[];
+  rows: RowT[];
+  rowClassName?: string;
+}) {
+  const MIN_W = 70;
+  const [widths, setWidths] = React.useState<number[]>(
+    columns.map((c) => Math.max(c.initPx ?? 140, MIN_W))
+  );
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+
+  // drag state
+  const drag = React.useRef<{
+    idx: number;
+    startX: number;
+    startW: number;
+    active: boolean;
+  }>({ idx: -1, startX: 0, startW: 0, active: false });
+
+  const onMouseMove = React.useCallback((e: MouseEvent) => {
+    if (!drag.current.active) return;
+    const dx = e.clientX - drag.current.startX;
+    setWidths((w) => {
+      const next = [...w];
+      next[drag.current.idx] = Math.max(MIN_W, drag.current.startW + dx);
+      return next;
+    });
+  }, []);
+
+  const onMouseUp = React.useCallback(() => {
+    if (!drag.current.active) return;
+    drag.current.active = false;
+    document.body.style.cursor = "default";
+    window.removeEventListener("mousemove", onMouseMove);
+    window.removeEventListener("mouseup", onMouseUp);
+  }, [onMouseMove]);
+
+  const startDrag = (idx: number, event: React.MouseEvent) => {
+    drag.current = {
+      idx,
+      startX: event.clientX,
+      startW: widths[idx],
+      active: true,
+    };
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
+  return (
+    <div ref={containerRef} className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+      <table className="w-max text-sm table-fixed">
+        <colgroup>
+          {widths.map((w, i) => (
+            <col key={i} style={{ width: `${w}px` }} />
+          ))}
+        </colgroup>
+
+        <thead className="bg-slate-50 text-slate-600 select-none">
+          <tr className="text-left">
+            {columns.map((c, i) => (
+              <th key={String(c.key)} className="relative font-semibold">
+                <div
+                  className={`px-3 py-2 whitespace-nowrap ${
+                    c.align === "right" ? "text-right" : c.align === "center" ? "text-center" : "text-left"
+                  }`}
+                  title={typeof c.label === "string" ? c.label : undefined}
+                >
+                  {c.headerRender ? c.headerRender() : c.label}
+                </div>
+                {/* drag handle */}
+                <span
+                  onMouseDown={(e) => startDrag(i, e)}
+                  className="absolute top-0 right-0 h-full w-1 cursor-col-resize"
+                />
+              </th>
+            ))}
+          </tr>
+        </thead>
+
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id} className={`border-t border-slate-100 ${rowClassName}`}>
+              {columns.map((c, i) => (
+                <td key={String(c.key)} className="px-3 py-2 whitespace-nowrap">
+                  {c.render ? (c.render(r) as React.ReactNode) : ((r as any)[c.key] as React.ReactNode)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-/* Inline-editable cell */
-function EditableCell({
+/** Editable cell (no wrap, click to edit, no text wrap even in input) */
+function Editable({
   value,
   onCommit,
   placeholder,
   type = "text",
   className = "",
-  displayRender,
 }: {
-  value: string | number | "" | undefined;
+  value: string;
   onCommit: (v: string) => void;
   placeholder?: string;
-  type?: "text" | "date" | "number" | "url" | "textarea";
-  className?: string; // applied in display mode
-  displayRender?: (v: string | number | "" | undefined) => React.ReactNode; // custom display
+  type?: "text" | "date";
+  className?: string;
 }) {
   const [editing, setEditing] = React.useState(false);
-  const [draft, setDraft] = React.useState(value === undefined ? "" : String(value));
-
-  React.useEffect(() => {
-    setDraft(value === undefined ? "" : String(value));
-  }, [value]);
+  const [draft, setDraft] = React.useState(value ?? "");
+  React.useEffect(() => setDraft(value ?? ""), [value]);
 
   if (!editing) {
-    const rendered =
-      displayRender
-        ? displayRender(value)
-        : value === "" || value === undefined
-          ? <span className="text-slate-400 italic">{placeholder ?? "—"}</span>
-          : type === "url"
-            ? (
-              <a
-                className="text-sky-600 underline underline-offset-2"
-                href={String(value)}
-                target="_blank"
-                rel="noreferrer"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {String(value)}
-              </a>
-            )
-            : String(value);
-
     return (
       <div
-        className={`px-2 py-1 cursor-text ${className}`}
+        className={`whitespace-nowrap cursor-text ${className}`}
         onDoubleClick={() => setEditing(true)}
-        title="Double-click to edit"
+        title={value || placeholder || ""}
       >
-        {rendered}
+        {value ? value : <span className="text-slate-400">{placeholder ?? "—"}</span>}
       </div>
     );
   }
-
   const commit = () => {
     onCommit(draft);
     setEditing(false);
   };
-
-  const commonProps = {
-    autoFocus: true,
-    value: draft,
-    onChange: (e: any) => setDraft(e.target.value),
-    onBlur: commit,
-    onKeyDown: (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && type !== "textarea") commit();
-      if (e.key === "Escape") setEditing(false);
-    },
-    className:
-      "w-full px-2 py-1 rounded border border-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-400 bg-white",
-  } as any;
-
-  return type === "textarea" ? (
-    <textarea rows={2} {...commonProps} />
-  ) : (
-    <input type={type} {...commonProps} />
-  );
-}
-
-/* ========================
-   Sortable Book of Business
-======================== */
-
-type SortDir = "asc" | "desc";
-type SortKey = keyof CSWRow;
-
-/* Single table row */
-function CSRow({
-  row,
-  onUpdate,
-  onDelete,
-  showTagBadges = false, // in non-BoB tabs we show badges (read-only)
-}: {
-  row: CSWRow;
-  onUpdate: (next: Partial<CSWRow>) => void;
-  onDelete: () => void;
-  showTagBadges?: boolean;
-}) {
   return (
-    <tr className="border-b last:border-0 border-slate-200 hover:bg-slate-50">
-      {/* Tags: BoB = checkboxes; other tabs = badges */}
-      <td className="whitespace-nowrap">
-        {showTagBadges ? (
-          <div className="flex gap-1 px-2 py-1 flex-wrap">
-            {row.tags.length ? row.tags.map((t) => <TagBadge key={t} t={t} />) : <span className="text-slate-400 italic">none</span>}
-          </div>
-        ) : (
-          <TagsCheckboxes value={row.tags} onChange={(v) => onUpdate({ tags: v })} />
-        )}
-      </td>
-
-      {/* Editable cells */}
-      <td><EditableCell value={row.company} onCommit={(v) => onUpdate({ company: v })} placeholder="Company" /></td>
-      <td><EditableCell value={row.primaryContact} onCommit={(v) => onUpdate({ primaryContact: v })} placeholder="Name" /></td>
-      <td><EditableCell value={row.phone} onCommit={(v) => onUpdate({ phone: v })} placeholder="Phone" /></td>
-      <td><EditableCell value={row.email} onCommit={(v) => onUpdate({ email: v })} placeholder="Email" /></td>
-      <td>
-        <EditableCell
-          type="date"
-          value={row.lastTouch}
-          onCommit={(v) => onUpdate({ lastTouch: v })}
-          placeholder="YYYY-MM-DD"
-          displayRender={(v) => fmtDate(String(v))}
-        />
-      </td>
-      <td>
-        <EditableCell
-          type="date"
-          value={row.lastContacted}
-          onCommit={(v) => onUpdate({ lastContacted: v })}
-          placeholder="YYYY-MM-DD"
-          displayRender={(v) => fmtDate(String(v))}
-        />
-      </td>
-      <td>
-        <EditableCell
-          type="url"
-          value={row.pipedriveUrl ?? ""}
-          onCommit={(v) => onUpdate({ pipedriveUrl: v })}
-          placeholder="https://app.pipedrive.com/..."
-        />
-      </td>
-
-      {/* Notes: one line + horizontal scroll; textarea only while editing */}
-      <td className="min-w-64">
-        <EditableCell
-          type="textarea"
-          value={row.notes ?? ""}
-          onCommit={(v) => onUpdate({ notes: v })}
-          placeholder="Notes…"
-          className="max-w-[800px] whitespace-nowrap overflow-x-auto"
-        />
-      </td>
-
-      {/* Target? */}
-      <td className="text-center">
-        <input
-          type="checkbox"
-          checked={!!row.target}
-          onChange={(e) => onUpdate({ target: e.target.checked })}
-          className="h-4 w-4"
-          title="Add to Today's Targets"
-        />
-      </td>
-
-      <td className="text-right pr-2">
-        <button
-          onClick={onDelete}
-          className="px-3 py-1 rounded bg-rose-600 text-white text-sm hover:bg-rose-700"
-        >
-          Delete
-        </button>
-      </td>
-    </tr>
+    <input
+      type={type}
+      autoFocus
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") setEditing(false);
+      }}
+      className="w-full px-2 py-1 rounded border border-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-400 bg-white whitespace-nowrap"
+      placeholder={placeholder}
+    />
   );
 }
 
-/* Reusable sortable table */
-function CSWTable({
-  rows,
-  setRows,
-  headerTitle,
-  filter,
-  showTagBadges = false,
-}: {
-  rows: CSWRow[];
-  setRows: React.Dispatch<React.SetStateAction<CSWRow[]>>;
-  headerTitle: string;
-  filter?: (r: CSWRow) => boolean;
-  showTagBadges?: boolean; // true for non-BoB tabs
-}) {
-  const visible = React.useMemo(
-    () => (filter ? rows.filter(filter) : rows),
-    [rows, filter]
-  );
+/** =========================
+ * Main App
+ * ========================= */
+export default function CustomerSuccessApp() {
+  const [screen, setScreen] = React.useState<"Workflow" | "Master Flow" | "Reports">("Workflow");
+  const [rows, setRows] = useLocalRows();
+  const [workflowTab, setWorkflowTab] = React.useState<
+    "Book of Business" | "Referrals" | "Upsells" | "Churn Risks" | "Today’s Targets" | "Renewals"
+  >("Book of Business");
+
+  const counts = React.useMemo(() => {
+    const has = (t: Tag) => rows.filter((r) => r.tags.includes(t)).length;
+    return {
+      book: rows.length,
+      ref: has("Referral"),
+      ups: has("Upsell"),
+      churn: has("Churn Risk"),
+      targets: rows.filter((r) => r.target).length,
+    };
+  }, [rows]);
+
+  /** Derived views */
+  const viewRows = React.useMemo(() => {
+    switch (workflowTab) {
+      case "Referrals":
+        return rows.filter((r) => r.tags.includes("Referral"));
+      case "Upsells":
+        return rows.filter((r) => r.tags.includes("Upsell"));
+      case "Churn Risks":
+        return rows.filter((r) => r.tags.includes("Churn Risk"));
+      case "Today’s Targets":
+        return rows.filter((r) => r.target);
+      case "Renewals": {
+        // everyone, sort by upcoming renewal (signedDate + 1y)
+        const withOrder = rows.map((r) => {
+          const nextRenewal = addYears(r.signedDate, 1);
+          const ord = nextRenewal ? nextRenewal.getTime() : Number.POSITIVE_INFINITY;
+          return { row: r, ord, hidden: r.hideRenewal ?? false };
+        });
+        // hide = pushed to bottom
+        withOrder.sort((a, b) => {
+          if (a.hidden !== b.hidden) return a.hidden ? 1 : -1;
+          return a.ord - b.ord;
+        });
+        return withOrder.map((x) => x.row);
+      }
+      default:
+        return rows;
+    }
+  }, [workflowTab, rows]);
+
+  /** Common actions */
+  const updateRow = (id: string, patch: Partial<Row>) =>
+    setRows((cur) => cur.map((r) => (r.id === id ? { ...r, ...patch } : r)));
 
   const addRow = () =>
     setRows((cur) => [
@@ -306,458 +345,344 @@ function CSWTable({
         email: "",
         lastTouch: "",
         lastContacted: "",
-        notes: "",
+        signedDate: "",
         pipedriveUrl: "",
+        notes: "",
         tags: [],
         target: false,
+        hideRenewal: false,
       },
       ...cur,
     ]);
 
-  /* ---- Sorting ---- */
-  const [sortKey, setSortKey] = React.useState<SortKey>("company");
-  const [sortDir, setSortDir] = React.useState<SortDir>("asc");
+  const deleteRow = (id: string) => setRows((cur) => cur.filter((r) => r.id !== id));
 
-  const sorted = React.useMemo(() => {
-    const list = [...visible];
-    list.sort((a, b) => {
-      const av = a[sortKey] ?? "";
-      const bv = b[sortKey] ?? "";
-      if (sortKey === "target") {
-        const na = !!av ? 1 : 0;
-        const nb = !!bv ? 1 : 0;
-        return sortDir === "asc" ? na - nb : nb - na;
-      }
-      return sortDir === "asc"
-        ? String(av).localeCompare(String(bv))
-        : String(bv).localeCompare(String(av));
-    });
-    return list;
-  }, [visible, sortKey, sortDir]);
-
-  function th(label: string, k: SortKey | "dummy") {
-    if (k === "dummy") return <th key={label} className="px-2 py-2" />;
-    const active = sortKey === k;
-    const arrow = active ? (sortDir === "asc" ? "↑" : "↓") : "";
-    return (
-      <th
-        key={String(k)}
-        onClick={() => {
-          if (active) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-          else {
-            setSortKey(k as SortKey);
-            setSortDir("asc");
-          }
-        }}
-        className={`px-2 py-2 text-left text-sm font-semibold cursor-pointer select-none ${
-          active ? "underline" : ""
-        }`}
-        title="Click to sort"
-      >
-        {label} {arrow}
-      </th>
-    );
-  }
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
-        <h3 className="text-lg font-semibold text-slate-800">{headerTitle}</h3>
-        <button
-          onClick={addRow}
-          className="px-3 py-1.5 rounded-xl bg-slate-900 text-white text-sm hover:bg-slate-800"
-        >
-          + Add New
-        </button>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-600">
-            <tr className="text-left">
-              {th("Tags", "tags" as any)}
-              {th("Company", "company")}
-              {th("Primary Contact", "primaryContact")}
-              {th("Phone", "phone")}
-              {th("Email", "email")}
-              {th("Last Touch", "lastTouch")}
-              {th("Last Contacted", "lastContacted")}
-              {th("PipeDrive Link", "pipedriveUrl")}
-              {th("Notes", "notes")}
-              {th("Target?", "target")}
-              {th("", "dummy")}
-            </tr>
-          </thead>
-
-          <tbody>
-            {sorted.length === 0 ? (
-              <tr>
-                <td colSpan={13} className="px-4 py-10 text-center text-slate-400">
-                  No rows yet. Click <b>+ Add New</b> to create your first record.
-                </td>
-              </tr>
-            ) : (
-              sorted.map((r) => (
-                <CSRow
-                  key={r.id}
-                  row={r}
-                  showTagBadges={showTagBadges}
-                  onUpdate={(next) =>
-                    setRows((cur) =>
-                      cur.map((x) => (x.id === r.id ? { ...x, ...next } : x))
-                    )
-                  }
-                  onDelete={() =>
-                    setRows((cur) => cur.filter((x) => x.id !== r.id))
-                  }
-                />
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/* ========================
-   Workflow Pro (Tabs)
-======================== */
-
-function WorkflowPro() {
-  const [rows, setRows] = useLocalStorageState<CSWRow[]>("csw.book", [
-    // Seed records (edit/delete inline)
+  /** Columns (NO WRAP + resizable) */
+  const baseCols: Column<Row>[] = [
     {
-      id: uid(),
-      company: "Jamar Power",
-      primaryContact: "Phil Edwards",
-      phone: "619-261-2262",
-      email: "phil@jamarpower.com",
-      lastTouch: "2025-10-21",
-      lastContacted: "2025-10-21",
-      notes: "Asked about investing",
-      pipedriveUrl: "",
-      tags: ["Referral"],
-      target: false,
-    },
-    {
-      id: uid(),
-      company: "Stardust",
-      primaryContact: "Brennen Chaput",
-      phone: "705-507-0867",
-      email: "brennen@stardustsolar.com",
-      lastTouch: "2025-10-21",
-      lastContacted: "2025-10-21",
-      notes: "",
-      pipedriveUrl: "",
-      tags: ["Referral"],
-      target: false,
-    },
-    {
-      id: uid(),
-      company: "RME",
-      primaryContact: "Erick Justesen",
-      phone: "",
-      email: "erick@rmeinnovations.com",
-      lastTouch: "2025-10-21",
-      lastContacted: "2025-10-21",
-      notes: "",
-      pipedriveUrl: "",
-      tags: ["Referral", "Churn Risk"],
-      target: false,
-    },
-    {
-      id: uid(),
-      company: "Homepal",
-      primaryContact: "Jourdan Ochoa",
-      phone: "480-466-9773",
-      email: "jourdan@custompro.us",
-      lastTouch: "2025-10-22",
-      lastContacted: "2025-10-22",
-      notes:
-        "Great convo; she seemed excited. Told her to email intro to me and Walid.",
-      pipedriveUrl: "",
-      tags: ["Referral", "Upsell"],
-      target: true,
-    },
-  ]);
-
-  type View =
-    | "Book of Business"
-    | "Referrals"
-    | "Upsells"
-    | "Churn Risks"
-    | "Today's Targets";
-
-  const [view, setView] = React.useState<View>("Book of Business");
-
-  const counts = React.useMemo(() => {
-    const has = (t: CSWTag) => rows.filter((r) => r.tags.includes(t)).length;
-    return {
-      all: rows.length,
-      ref: has("Referral"),
-      ups: has("Upsell"),
-      churn: has("Churn Risk"),
-      targets: rows.filter((r) => !!r.target).length,
-    };
-  }, [rows]);
-
-  return (
-    <section className="space-y-6">
-      {/* Summary cards */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Book of Business</div>
-          <div className="text-3xl font-semibold">{counts.all}</div>
-        </div>
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Referrals</div>
-          <div className="text-3xl font-semibold">{counts.ref}</div>
-        </div>
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Upsells</div>
-          <div className="text-3xl font-semibold">{counts.ups}</div>
-        </div>
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Churn Risks</div>
-          <div className="text-3xl font-semibold">{counts.churn}</div>
-        </div>
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Today’s Targets</div>
-          <div className="text-3xl font-semibold">{counts.targets}</div>
-        </div>
-      </div>
-
-      {/* Sub-tabs */}
-      <div className="flex gap-2">
-        {(
-          [
-            "Book of Business",
-            "Referrals",
-            "Upsells",
-            "Churn Risks",
-            "Today's Targets",
-          ] as View[]
-        ).map((t) => (
-          <button
-            key={t}
-            onClick={() => setView(t)}
-            className={`rounded-xl px-3 py-1.5 text-sm border ${
-              view === t
-                ? "bg-slate-900 text-white border-slate-900"
-                : "bg-white text-slate-700 border-slate-300"
-            }`}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
-
-      {/* Tables */}
-      {view === "Book of Business" && (
-        <CSWTable rows={rows} setRows={setRows} headerTitle="Book of Business (All Customers)" />
-      )}
-
-      {view === "Referrals" && (
-        <CSWTable
-          rows={rows}
-          setRows={setRows}
-          headerTitle="Referrals"
-          showTagBadges
-          filter={(r) => r.tags.includes("Referral")}
-        />
-      )}
-
-      {view === "Upsells" && (
-        <CSWTable
-          rows={rows}
-          setRows={setRows}
-          headerTitle="Upsells"
-          showTagBadges
-          filter={(r) => r.tags.includes("Upsell")}
-        />
-      )}
-
-      {view === "Churn Risks" && (
-        <CSWTable
-          rows={rows}
-          setRows={setRows}
-          headerTitle="Churn Risks"
-          showTagBadges
-          filter={(r) => r.tags.includes("Churn Risk")}
-        />
-      )}
-
-      {view === "Today's Targets" && (
-        <CSWTable
-          rows={rows}
-          setRows={setRows}
-          headerTitle="Today's Targets"
-          showTagBadges
-          filter={(r) => !!r.target}
-        />
-      )}
-    </section>
-  );
-}
-
-/* ========================
-   Master Flow & Reports
-======================== */
-
-function MasterFlow() {
-  const [rows, setRows] = useLocalStorageState<CSWRow[]>("csw.book", []);
-
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Total Records</div>
-          <div className="text-3xl font-semibold">{rows.length}</div>
-        </div>
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Referrals</div>
-          <div className="text-3xl font-semibold">
-            {rows.filter((r) => r.tags.includes("Referral")).length}
-          </div>
-        </div>
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Upsells</div>
-          <div className="text-3xl font-semibold">
-            {rows.filter((r) => r.tags.includes("Upsell")).length}
-          </div>
-        </div>
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Churn Risks</div>
-          <div className="text-3xl font-semibold">
-            {rows.filter((r) => r.tags.includes("Churn Risk")).length}
-          </div>
-        </div>
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Today’s Targets</div>
-          <div className="text-3xl font-semibold">
-            {rows.filter((r) => !!r.target).length}
-          </div>
-        </div>
-      </div>
-
-      <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white/60 backdrop-blur">
-        <table className="min-w-full">
-          <thead className="bg-slate-50/60">
-            <tr>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600">Tags</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600">Company</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600">Primary Contact</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600">Email</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600">Last Touch</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600">Last Contacted</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600">Target?</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/40">
-                <td className="px-4 py-3 text-sm">
-                  <div className="flex gap-1 flex-wrap">
-                    {r.tags.length ? r.tags.map((t) => <TagBadge key={t} t={t} />) : <span className="text-slate-400 italic">none</span>}
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-sm">{r.company}</td>
-                <td className="px-4 py-3 text-sm">{r.primaryContact}</td>
-                <td className="px-4 py-3 text-sm text-blue-700 underline">
-                  <a href={`mailto:${r.email}`}>{r.email}</a>
-                </td>
-                <td className="px-4 py-3 text-sm">{fmtDate(r.lastTouch)}</td>
-                <td className="px-4 py-3 text-sm">{fmtDate(r.lastContacted)}</td>
-                <td className="px-4 py-3 text-sm">
+      key: "tags",
+      label: "Tags",
+      initPx: 170,
+      render: (r) => (
+        <div className="flex items-center gap-2 whitespace-nowrap">
+          {/* BoB shows checkboxes to toggle tags */}
+          {workflowTab === "Book of Business" ? (
+            ["Referral", "Upsell", "Churn Risk"].map((t) => {
+              const tag = t as Tag;
+              const checked = r.tags.includes(tag);
+              return (
+                <label key={t} className="flex items-center gap-1 text-xs">
                   <input
                     type="checkbox"
-                    className="h-4 w-4"
-                    checked={!!r.target}
+                    checked={checked}
                     onChange={(e) =>
-                      setRows((cur) =>
-                        cur.map((x) =>
-                          x.id === r.id ? { ...x, target: e.target.checked } : x
-                        )
-                      )
+                      updateRow(r.id, {
+                        tags: e.target.checked
+                          ? [...r.tags, tag]
+                          : r.tags.filter((x) => x !== tag),
+                      })
                     }
                   />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function Reports() {
-  return (
-    <div className="space-y-6">
-      <h2 className="text-xl font-semibold text-slate-800">Productivity Report</h2>
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Total Touches</div>
-          <div className="text-3xl font-semibold">4</div>
+                  {t}
+                </label>
+              );
+            })
+          ) : (
+            // Non-BoB tabs: show badges
+            (r.tags.length ? r.tags : []).map((t) => <Badge key={t} t={t} />)
+          )}
         </div>
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Total Updates</div>
-          <div className="text-3xl font-semibold">8</div>
-        </div>
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Avg Touches/Day</div>
-          <div className="text-3xl font-semibold">0.6</div>
-        </div>
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Avg Updates/Day</div>
-          <div className="text-3xl font-semibold">1.1</div>
-        </div>
-      </div>
-      <div className="rounded-2xl bg-white/60 backdrop-blur border border-slate-200 p-6 text-slate-600">
-        <p>Chart placeholder. Wire up to your data (e.g., Recharts) to mirror Base44’s bar chart.</p>
-      </div>
-    </div>
-  );
-}
+      ),
+    },
+    {
+      key: "company",
+      label: "Company",
+      initPx: 210,
+      render: (r) => (
+        <Editable
+          value={fmt(r.company)}
+          onCommit={(v) => updateRow(r.id, { company: v })}
+          placeholder="Company"
+        />
+      ),
+    },
+    {
+      key: "primaryContact",
+      label: "Primary Contact",
+      initPx: 170,
+      render: (r) => (
+        <Editable
+          value={fmt(r.primaryContact)}
+          onCommit={(v) => updateRow(r.id, { primaryContact: v })}
+          placeholder="Name"
+        />
+      ),
+    },
+    {
+      key: "phone",
+      label: "Phone",
+      initPx: 130,
+      render: (r) => (
+        <Editable
+          value={fmt(r.phone)}
+          onCommit={(v) => updateRow(r.id, { phone: v })}
+          placeholder="Phone"
+          className="tabular-nums"
+        />
+      ),
+    },
+    {
+      key: "email",
+      label: "Email",
+      initPx: 210,
+      render: (r) => (
+        <Editable
+          value={fmt(r.email)}
+          onCommit={(v) => updateRow(r.id, { email: v })}
+          placeholder="Email"
+        />
+      ),
+    },
+    {
+      key: "lastTouch",
+      label: "Last Touch",
+      initPx: 120,
+      render: (r) => (
+        <Editable
+          value={fmt(r.lastTouch)}
+          onCommit={(v) => updateRow(r.id, { lastTouch: v })}
+          placeholder="mm/dd/yyyy"
+        />
+      ),
+    },
+    {
+      key: "lastContacted",
+      label: "Last Contacted",
+      initPx: 130,
+      render: (r) => (
+        <Editable
+          value={fmt(r.lastContacted)}
+          onCommit={(v) => updateRow(r.id, { lastContacted: v })}
+          placeholder="mm/dd/yyyy"
+        />
+      ),
+    },
+    {
+      key: "signedDate",
+      label: "Signed Date",
+      initPx: 120,
+      render: (r) => (
+        <Editable
+          value={fmt(r.signedDate || "")}
+          onCommit={(v) => updateRow(r.id, { signedDate: v })}
+          placeholder="mm/dd/yyyy"
+        />
+      ),
+    },
+    {
+      key: "pipedriveUrl",
+      label: "PipeDrive",
+      initPx: 110, // small, no wrap
+      render: (r) =>
+        r.pipedriveUrl ? (
+          <a
+            href={r.pipedriveUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center px-2 py-1 rounded border border-slate-300 text-sky-700 hover:bg-slate-50 whitespace-nowrap"
+            title={r.pipedriveUrl}
+          >
+            Open
+          </a>
+        ) : (
+          <Editable
+            value=""
+            onCommit={(v) => updateRow(r.id, { pipedriveUrl: v })}
+            placeholder="https://…"
+          />
+        ),
+    },
+    {
+      key: "notes",
+      label: "Notes",
+      initPx: 260, // slightly smaller by default (resizable anyway)
+      render: (r) => (
+        <Editable
+          value={fmt(r.notes || "")}
+          onCommit={(v) => updateRow(r.id, { notes: v })}
+          placeholder="Notes…"
+        />
+      ),
+    },
+    {
+      key: "target",
+      label: "Target?",
+      initPx: 90,
+      render: (r) => (
+        <input
+          type="checkbox"
+          checked={!!r.target}
+          onChange={(e) => updateRow(r.id, { target: e.target.checked })}
+        />
+      ),
+    },
+    {
+      key: "actions",
+      label: "",
+      initPx: 90,
+      render: (r) => (
+        <button
+          onClick={() => deleteRow(r.id)}
+          className="px-3 py-1 rounded bg-rose-600 text-white text-sm hover:bg-rose-700 whitespace-nowrap"
+        >
+          Delete
+        </button>
+      ),
+    },
+  ];
 
-/* ========================
-   Root App Shell
-======================== */
+  // Additional column only visible in Renewals: Hide?
+  const renewalHideCol: Column<Row> = {
+    key: "hideRenewal",
+    label: "Hide",
+    initPx: 70,
+    render: (r) => (
+      <input
+        type="checkbox"
+        checked={!!r.hideRenewal}
+        onChange={(e) => updateRow(r.id, { hideRenewal: e.target.checked })}
+        title="Hide this account in Renewals (pushed to bottom)"
+      />
+    ),
+  };
 
-export default function CustomerSuccessApp() {
-  const [screen, setScreen] = React.useState<"Workflow" | "Master Flow" | "Reports">("Workflow");
+  const columnsForTab =
+    workflowTab === "Renewals" ? [...baseCols.slice(0, baseCols.length - 2), renewalHideCol, ...baseCols.slice(-2)] : baseCols;
 
+  /** Layout */
   return (
     <main className="w-screen h-screen overflow-hidden bg-slate-100 text-slate-800 flex flex-col">
-      <div className="flex-1 flex flex-col p-4 overflow-auto">
-        {/* Header */}
-        <div className="flex items-center gap-3">
-          <div className="h-11 w-11 rounded-2xl bg-white/60 border border-slate-200 shadow-sm flex items-center justify-center">👤</div>
-          <div>
-            <h1 className="text-2xl font-semibold">Customer Success</h1>
-            <p className="text-slate-500 text-sm -mt-0.5">Workflow Management</p>
-          </div>
-          <div className="flex-1" />
-          <div className="flex gap-2">
-            {["Workflow", "Master Flow", "Reports"].map((t) => (
-              <button
-                key={t}
-                onClick={() => setScreen(t as any)}
-                className={`rounded-xl px-4 py-2 text-sm border shadow-sm ${
-                  screen === t ? "bg-slate-900 text-white" : "bg-white border-slate-200"
-                }`}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
+      {/* Top Header */}
+      <div className="flex items-center gap-3 px-4 pt-3">
+        <div className="h-10 w-10 rounded-2xl bg-white/80 border border-slate-200 shadow-sm flex items-center justify-center">
+          👤
+        </div>
+        <div>
+          <h1 className="text-xl font-semibold">Customer Success</h1>
+          <p className="text-slate-500 text-xs -mt-0.5 whitespace-nowrap">Workflow Management</p>
+        </div>
+        <div className="flex-1" />
+        <div className="flex gap-2">
+          {(["Workflow", "Master Flow", "Reports"] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => setScreen(t)}
+              className={`rounded-xl px-4 py-2 text-sm border shadow-sm whitespace-nowrap ${
+                screen === t ? "bg-slate-900 text-white" : "bg-white border-slate-200"
+              }`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col p-4 overflow-auto gap-4">
+        {/* Summary */}
+        <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+          <Card title="Book of Business" value={counts.book} />
+          <Card title="Referrals" value={counts.ref} />
+          <Card title="Upsells" value={counts.ups} />
+          <Card title="Churn Risks" value={counts.churn} />
+          <Card title="Today’s Targets" value={counts.targets} />
         </div>
 
-        {/* Screens */}
-        {screen === "Workflow" && <WorkflowPro />}
-        {screen === "Master Flow" && <MasterFlow />}
-        {screen === "Reports" && <Reports />}
+        {screen === "Workflow" && (
+          <>
+            {/* Sub-tabs */}
+            <div className="flex gap-2">
+              {(
+                [
+                  "Book of Business",
+                  "Referrals",
+                  "Upsells",
+                  "Churn Risks",
+                  "Today’s Targets",
+                  "Renewals",
+                ] as const
+              ).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setWorkflowTab(t)}
+                  className={`rounded-xl px-3 py-1.5 text-sm border whitespace-nowrap ${
+                    workflowTab === t ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-300"
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+              <div className="flex-1" />
+              <button
+                onClick={addRow}
+                className="rounded-xl px-3 py-1.5 text-sm border bg-white border-slate-300 hover:bg-slate-50 whitespace-nowrap"
+              >
+                + Add New
+              </button>
+            </div>
+
+            {/* Table */}
+            <ResizableTable<Row>
+              columns={columnsForTab}
+              rows={viewRows}
+              rowClassName="hover:bg-slate-50/40"
+            />
+          </>
+        )}
+
+        {screen === "Master Flow" && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <Card title="Total Records" value={rows.length} />
+              <Card title="Referrals" value={rows.filter((r) => r.tags.includes("Referral")).length} />
+              <Card title="Upsells" value={rows.filter((r) => r.tags.includes("Upsell")).length} />
+              <Card title="Churn Risks" value={rows.filter((r) => r.tags.includes("Churn Risk")).length} />
+            </div>
+
+            {/* Simple read-only combined list */}
+            <ResizableTable<Row>
+              columns={[
+                { key: "tags", label: "Tags", initPx: 160, render: (r) => (r.tags.length ? r.tags.map((t) => <Badge key={t} t={t} />) : "—") },
+                { key: "company", label: "Company", initPx: 200 },
+                { key: "primaryContact", label: "Primary Contact", initPx: 160 },
+                { key: "email", label: "Email", initPx: 220 },
+                { key: "lastTouch", label: "Last Touch", initPx: 120 },
+                { key: "lastContacted", label: "Last Contacted", initPx: 140 },
+                {
+                  key: "signedDate",
+                  label: "Signed Date",
+                  initPx: 120,
+                  render: (r) => fmt(r.signedDate || ""),
+                },
+              ]}
+              rows={rows}
+            />
+          </div>
+        )}
+
+        {screen === "Reports" && (
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">Reports</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <Card title="Total Touches" value="—" />
+              <Card title="Total Updates" value="—" />
+              <Card title="Avg Touches/Day" value="—" />
+              <Card title="Avg Updates/Day" value="—" />
+            </div>
+            <div className="rounded-2xl bg-white border border-slate-200 p-6 text-slate-600 whitespace-nowrap">
+              Chart placeholder. Wire to your metrics later.
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );
