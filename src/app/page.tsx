@@ -7,7 +7,7 @@ import React from "react";
  * ========================= */
 
 // NEW tag names (what you see in UI going forward)
-type Tag = "Organic" | "Website" | "E-Book";
+type Tag = "Closed" | "Docs Sent" | "High Intent";
 
 // Backward compat tag names that may already be in localStorage
 type LegacyTag = "Referral" | "Upsell" | "Churn Risk";
@@ -65,17 +65,22 @@ function addYears(mdy: string | undefined, years: number): Date | null {
 /** =========================
  * Tag mapping (old -> new)
  * ========================= */
-function toNewTag(t: Tag | LegacyTag): Tag {
-  if (t === "Referral") return "Organic";
-  if (t === "Upsell") return "Website";
-  if (t === "Churn Risk") return "E-Book";
+function toNewTag(t: Tag | LegacyTag | "Organic" | "Website" | "E-Book"): Tag {
+  // Legacy tag mappings
+  if (t === "Referral") return "Closed";
+  if (t === "Upsell") return "Docs Sent";
+  if (t === "Churn Risk") return "High Intent";
+  // Previous tag name mappings (backward compatibility)
+  if (t === "Organic") return "Closed";
+  if (t === "Website") return "Docs Sent";
+  if (t === "E-Book") return "High Intent";
   return t; // already new
 }
 
 /** Non-destructive migration: preserve rows, add fields, convert old tags */
 function migrate(rows: any[]): Row[] {
   return (rows || []).map((r: any) => {
-    const rawTags: (Tag | LegacyTag)[] = Array.isArray(r.tags) ? r.tags : [];
+    const rawTags: (Tag | LegacyTag | "Organic" | "Website" | "E-Book")[] = Array.isArray(r.tags) ? r.tags : [];
     const tags = rawTags.map(toNewTag).filter(Boolean) as Tag[];
 
     return {
@@ -139,9 +144,9 @@ const Card = ({ title, value }: { title: string; value: React.ReactNode }) => (
 
 const Badge = ({ t }: { t: Tag }) => {
   const map: Record<Tag, string> = {
-    Organic: "bg-sky-100 text-sky-700 border-sky-300",
-    Website: "bg-emerald-100 text-emerald-700 border-emerald-300",
-    "E-Book": "bg-rose-100 text-rose-700 border-rose-300",
+    "Closed": "bg-sky-100 text-sky-700 border-sky-300",
+    "Docs Sent": "bg-emerald-100 text-emerald-700 border-emerald-300",
+    "High Intent": "bg-rose-100 text-rose-700 border-rose-300",
   };
   return (
     <span className={`px-2 py-0.5 text-xs rounded-full border ${map[t]} whitespace-nowrap`}>
@@ -317,16 +322,16 @@ export default function CustomerSuccessApp() {
   const [rows, setRows] = useLocalRows();
 
   const [workflowTab, setWorkflowTab] = React.useState<
-    "Book of Business" | "Organic" | "Website" | "E-Book" | "Today’s Targets" | "Renewals"
+    "Book of Business" | "Closed" | "Docs Sent" | "High Intent" | "Today's Targets" | "Renewals"
   >("Book of Business");
 
   const counts = React.useMemo(() => {
     const has = (t: Tag) => rows.filter((r) => r.tags.includes(t)).length;
     return {
       book: rows.length,
-      organic: has("Organic"),
-      website: has("Website"),
-      ebook: has("E-Book"),
+      closed: has("Closed"),
+      docsSent: has("Docs Sent"),
+      highIntent: has("High Intent"),
       targets: rows.filter((r) => r.target).length,
     };
   }, [rows]);
@@ -334,13 +339,13 @@ export default function CustomerSuccessApp() {
   /** Derived views */
   const viewRows = React.useMemo(() => {
     switch (workflowTab) {
-      case "Organic":
-        return rows.filter((r) => r.tags.includes("Organic"));
-      case "Website":
-        return rows.filter((r) => r.tags.includes("Website"));
-      case "E-Book":
-        return rows.filter((r) => r.tags.includes("E-Book"));
-      case "Today’s Targets":
+      case "Closed":
+        return rows.filter((r) => r.tags.includes("Closed"));
+      case "Docs Sent":
+        return rows.filter((r) => r.tags.includes("Docs Sent"));
+      case "High Intent":
+        return rows.filter((r) => r.tags.includes("High Intent"));
+      case "Today's Targets":
         return rows.filter((r) => r.target);
       case "Renewals": {
         const withOrder = rows.map((r) => {
@@ -394,7 +399,7 @@ export default function CustomerSuccessApp() {
       render: (r) => (
         <div className="flex items-center gap-2 whitespace-nowrap">
           {workflowTab === "Book of Business" ? (
-            (["Organic", "Website", "E-Book"] as Tag[]).map((t) => {
+            (["Closed", "Docs Sent", "High Intent"] as Tag[]).map((t) => {
               const checked = r.tags.includes(t);
               return (
                 <label key={t} className="flex items-center gap-1 text-xs">
@@ -581,10 +586,10 @@ export default function CustomerSuccessApp() {
         {/* Summary */}
         <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
           <Card title="Book of Business" value={counts.book} />
-          <Card title="Organic" value={counts.organic} />
-          <Card title="Website" value={counts.website} />
-          <Card title="E-Book" value={counts.ebook} />
-          <Card title="Today’s Targets" value={counts.targets} />
+          <Card title="Closed" value={counts.closed} />
+          <Card title="Docs Sent" value={counts.docsSent} />
+          <Card title="High Intent" value={counts.highIntent} />
+          <Card title="Today's Targets" value={counts.targets} />
         </div>
 
         {screen === "Workflow" && (
@@ -594,10 +599,10 @@ export default function CustomerSuccessApp() {
               {(
                 [
                   "Book of Business",
-                  "Organic",
-                  "Website",
-                  "E-Book",
-                  "Today’s Targets",
+                  "Closed",
+                  "Docs Sent",
+                  "High Intent",
+                  "Today's Targets",
                   "Renewals",
                 ] as const
               ).map((t) => (
@@ -630,9 +635,9 @@ export default function CustomerSuccessApp() {
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
               <Card title="Total Records" value={rows.length} />
-              <Card title="Organic" value={rows.filter((r) => r.tags.includes("Organic")).length} />
-              <Card title="Website" value={rows.filter((r) => r.tags.includes("Website")).length} />
-              <Card title="E-Book" value={rows.filter((r) => r.tags.includes("E-Book")).length} />
+              <Card title="Closed" value={rows.filter((r) => r.tags.includes("Closed")).length} />
+              <Card title="Docs Sent" value={rows.filter((r) => r.tags.includes("Docs Sent")).length} />
+              <Card title="High Intent" value={rows.filter((r) => r.tags.includes("High Intent")).length} />
             </div>
 
             <ResizableTable<Row>
